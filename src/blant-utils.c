@@ -9,6 +9,7 @@
 #include "blant-predict.h"
 #include "sim_anneal.h"
 #include "tree.h"
+#include "stack.h"
 
 // The following is the most compact way to store the permutation between a non-canonical and its canonical representative,
 // when k=8: there are 8 entries, and each entry is a integer from 0 to 7, which requires 3 bits. 8*3=24 bits total.
@@ -131,6 +132,7 @@ static int CmpInt(foint a, foint b){
     return 0;
 }
 TREETYPE *seenPerms;
+STACK *topoStack;
 static Gint_type _sortBest;
 static int _curLabel[MAX_K];   // _curLabel[pos] = original sampled index now at position pos
 static int _bestPerm[MAX_K];   // snapshot of _curLabel that produced _sortBest
@@ -181,6 +183,49 @@ void getCycle(int permutation[], int cycle[], int seed, int current, Boolean vis
         getCycle(permutation, cycle, seed, permutation[current], visited);
 }
 void freeInt128Ptr(foint v) { free(v.v); }
+static void _toposortPass(TINY_GRAPH *g, int *groupStart, int numGroups, int gi, int pos, Boolean computeOrbits) {
+    #if DEBUG_ATTEMPTS
+    attempts++;
+    #endif
+    int i;
+    int start = groupStart[gi];
+    int groupSize = groupStart[gi+1] - start;
+    short curSwapGroup[start+pos];
+    if(pos == groupSize) {
+        if(gi + 1 != numGroups) {
+            _tryGroupPerms(g, groupStart, numGroups, gi+1, 0, computeOrbits); //Otherwise, we recurse into the next group.
+        }
+        return;
+    }
+    for(i=0;i<start+pos;i++){
+	curSwapGroup[i]=_swapGroup[_curLabel[i]];
+    }
+    Gint_type Gint = TinyGraph2Int(g,_k);
+    foint key = {.ul=swapGroup2Int(curSwapGroup,start+pos)};
+    foint found;
+    if(TreeLookup(seenPerms,key,&found)){ //if this swap group distribution was seen before
+	return;
+    }
+    foint val = {.u = 1};
+    TreeInsert(seenPerms,key,val);
+    for(i = pos; i < groupSize; i++) {
+        //Try all possible ways of swapping node pos with swapping further nodes in the group (including not swapping i with anything, which is when pos=i)
+        if(i != pos) {
+            TinyGraphSwapNodes(g, start+pos, start+i);
+            if(Gint==TinyGraph2Int(g,_k)) { //If the swap doesn't change the decimal, then we can skip this branch of the recursion.
+                TinyGraphSwapNodes(g, start+pos, start+i);
+                continue;
+            }
+            int t = _curLabel[start+pos]; _curLabel[start+pos] = _curLabel[start+i]; _curLabel[start+i] = t;
+        }
+        _toposortPass(g, groupStart, numGroups, gi, pos+1, computeOrbits); //Recurse further after the swap, then afterwards undo the swap so that the next node can be swapped with pos
+        if(i != pos) {
+            TinyGraphSwapNodes(g, start+pos, start+i);
+            int t = _curLabel[start+pos]; _curLabel[start+pos] = _curLabel[start+i]; _curLabel[start+i] = t;
+        }
+    }
+    StackPush(topoStack,key);
+}
 static void _tryGroupPerms(TINY_GRAPH *g, int *groupStart, int numGroups, int gi, int pos, Boolean computeOrbits) {
     #if DEBUG_ATTEMPTS
     attempts++;
@@ -261,6 +306,7 @@ Gint_type L_K_Func_Sort(Gint_type Gint, unsigned char permOut[], unsigned short 
     attempts=0; // reset the counter so the caller can read it after this call returns
     #endif
     seenPerms = TreeAlloc(CmpInt,NULL,NULL,copyInt128Ptr,freeInt128Ptr);
+    topoStack = StackAlloc(33554432); //32 MB will be enough for k=15 but not excessive
     static TINY_GRAPH g;
     /* Clear any stale state on the static temporary graph, then set basic fields */
     memset(&g, 0, sizeof(g));
@@ -314,6 +360,7 @@ Gint_type L_K_Func_Sort(Gint_type Gint, unsigned char permOut[], unsigned short 
     if(permOut) for(i = 0; i < _k; i++) permOut[i] = (unsigned char)_bestPerm[i];
     if(computeOrbits) for(int i=0;i<_k;i++) olist[i]=_orbits[_bestPerm[i]];
     TreeFree(seenPerms);
+    StackFree(topoStack);
     #if DEBUG_ATTEMPTS
     if (logAttemptsToFile) {
         FILE *attlog = fopen("attlog.txt", "a");
