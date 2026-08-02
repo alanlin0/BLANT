@@ -183,6 +183,36 @@ void getCycle(int permutation[], int cycle[], int seed, int current, Boolean vis
         getCycle(permutation, cycle, seed, permutation[current], visited);
 }
 void freeInt128Ptr(foint v) { free(v.v); }
+// A state in the permutation search, pushed onto topoStack by _toposortPass.
+// Reading the stack backwards gives the states in topological order. Each node
+// stores only the swap-group ordering (position -> original node), which is all
+// the second pass needs: it recomputes each complete state's Gint and swap-group-
+// distribution key, keeping only the minimum per key, and finds _sortBest and, on
+// ties, the orbits.
+typedef struct _sortNode {
+    int len;                  // number of placed positions; == _k for complete states
+    int curLabel[MAX_K];      // the swap-group ordering (position -> original node)
+} SORT_NODE;
+
+// Given a complete swap-group ordering (position -> original node) and the sorted
+// graph g (which the first pass restores to its sorted arrangement), return the
+// Gint of the arrangement in which position i holds node curLabel[i].
+static Gint_type _orderGint(TINY_GRAPH *g, int curLabel[]) {
+    TINY_GRAPH gp;
+    int at[MAX_K], posOf[MAX_K], i, j;
+    TinyGraphCopy(&gp, g);
+    for(i = 0; i < _k; i++) { at[i] = _curLabel[i]; posOf[_curLabel[i]] = i; } //gp vertex x holds original node _curLabel[x]
+    for(i = 0; i < _k; i++) {
+        j = posOf[curLabel[i]];
+        if(j != i) {
+            TinyGraphSwapNodes(&gp, i, j);
+            int old = at[i];
+            at[i] = curLabel[i]; at[j] = old;
+            posOf[curLabel[i]] = i; posOf[old] = j;
+        }
+    }
+    return TinyGraph2Int(&gp, _k);
+}
 static void _toposortPass(TINY_GRAPH *g, int *groupStart, int numGroups, int gi, int pos, Boolean computeOrbits) {
     #if DEBUG_ATTEMPTS
     attempts++;
@@ -192,22 +222,31 @@ static void _toposortPass(TINY_GRAPH *g, int *groupStart, int numGroups, int gi,
     int groupSize = groupStart[gi+1] - start;
     short curSwapGroup[start+pos];
     if(pos == groupSize) {
-        if(gi + 1 != numGroups) {
-            _tryGroupPerms(g, groupStart, numGroups, gi+1, 0, computeOrbits); //Otherwise, we recurse into the next group.
+        if(gi + 1 == numGroups) { //last group is done: this is a complete permutation
+            for(int j = 0; j < _k; j++) curSwapGroup[j] = _swapGroup[_curLabel[j]];
+            unsigned long key = swapGroup2Int(curSwapGroup, _k);
+            if(TreeLookup(seenPerms, (foint){.ul = key}, NULL)) return; //this swap group distribution was seen before: prune it, regardless of value
+            foint val = {.v = Malloc(sizeof(__int128))};
+            *(__int128*)val.v = TinyGraph2Int(g, _k);
+            TreeInsert(seenPerms, (foint){.ul = key}, val);
+            SORT_NODE *node = Malloc(sizeof(SORT_NODE));
+            node->len = _k;
+            for(int j = 0; j < _k; j++) node->curLabel[j] = _curLabel[j];
+            StackPush(topoStack, (foint){.v = node});
+            return;
         }
+        _toposortPass(g, groupStart, numGroups, gi+1, 0, computeOrbits); //Otherwise, we recurse into the next group.
         return;
     }
     for(i=0;i<start+pos;i++){
 	curSwapGroup[i]=_swapGroup[_curLabel[i]];
     }
     Gint_type Gint = TinyGraph2Int(g,_k);
-    foint key = {.ul=swapGroup2Int(curSwapGroup,start+pos)};
-    foint found;
-    if(TreeLookup(seenPerms,key,&found)){ //if this swap group distribution was seen before
-	return;
-    }
-    foint val = {.u = 1};
-    TreeInsert(seenPerms,key,val);
+    unsigned long key = swapGroup2Int(curSwapGroup,start+pos);
+    if(TreeLookup(seenPerms, (foint){.ul = key}, NULL)) return; //this swap group distribution was seen before: prune this state and its subtree, regardless of value
+    foint val = {.v = Malloc(sizeof(__int128))};
+    *(__int128*)val.v = Gint;
+    TreeInsert(seenPerms, (foint){.ul = key}, val);
     for(i = pos; i < groupSize; i++) {
         //Try all possible ways of swapping node pos with swapping further nodes in the group (including not swapping i with anything, which is when pos=i)
         if(i != pos) {
@@ -224,66 +263,12 @@ static void _toposortPass(TINY_GRAPH *g, int *groupStart, int numGroups, int gi,
             int t = _curLabel[start+pos]; _curLabel[start+pos] = _curLabel[start+i]; _curLabel[start+i] = t;
         }
     }
-    StackPush(topoStack,key);
+    //Record this (partial) state on the toposort stack, after its children.
+    SORT_NODE *node = Malloc(sizeof(SORT_NODE));
+    node->len = start+pos;
+    for(int j = 0; j < start+pos; j++) node->curLabel[j] = _curLabel[j];
+    StackPush(topoStack, (foint){.v = node});
 }
-static void _tryGroupPerms(TINY_GRAPH *g, int *groupStart, int numGroups, int gi, int pos, Boolean computeOrbits) {
-    #if DEBUG_ATTEMPTS
-    attempts++;
-    #endif
-    int i;
-    int start = groupStart[gi];
-    int groupSize = groupStart[gi+1] - start;
-    short curSwapGroup[start+pos];
-    if(pos == groupSize) { //Meaning we are at the end of a group now
-        if(gi + 1 == numGroups) { //If this is the last group, then we are done and do not need to go deeper.
-            Gint_type val = TinyGraph2Int(g, _k);
-            if(val < _sortBest) {
-                int j;
-                _sortBest = val;
-                for(j = 0; j < _k; j++) _bestPerm[j] = _curLabel[j];
-		if(computeOrbits) for(int j=0;j<_k;j++) _orbits[j]=_swapGroup[j];
-            }
-	    else if(val == _sortBest && computeOrbits){ //Per the definition of orbits - if swapping some nodes results in the same decimal, then the nodes that were swapped are in the same orbit. Which is why orbits are checked like this.
-		int orbitperm[_k];
-		for(int j=0;j<_k;j++) orbitperm[_bestPerm[j]]=_curLabel[j];
-		makeOrbit(orbitperm, _orbits, _k);
-	    }
-        } else {
-            _tryGroupPerms(g, groupStart, numGroups, gi+1, 0, computeOrbits); //Otherwise, we recurse into the next group.
-        }
-        return;
-    }
-    for(i=0;i<start+pos;i++){
-	curSwapGroup[i]=_swapGroup[_curLabel[i]];
-    }
-    Gint_type Gint = TinyGraph2Int(g,_k);
-    foint key = {.ul=swapGroup2Int(curSwapGroup,start+pos)};
-    foint found;
-    if(TreeLookup(seenPerms,key,&found)){ //if this swap group distribution was seen before
-	if(*(__int128*)found.v<=Gint) return;
-	else TreeDelete(seenPerms,key);
-    }
-    foint val = {.v = Malloc(sizeof(__int128))};
-    *(__int128*)val.v = Gint;
-    TreeInsert(seenPerms,key,val);
-    for(i = pos; i < groupSize; i++) {
-        //Try all possible ways of swapping node pos with swapping further nodes in the group (including not swapping i with anything, which is when pos=i)
-        if(i != pos) {
-            TinyGraphSwapNodes(g, start+pos, start+i);
-            if(Gint==TinyGraph2Int(g,_k)) { //If the swap doesn't change the decimal, then we can skip this branch of the recursion.
-                TinyGraphSwapNodes(g, start+pos, start+i);
-                continue;
-            }
-            int t = _curLabel[start+pos]; _curLabel[start+pos] = _curLabel[start+i]; _curLabel[start+i] = t;
-        }
-        _tryGroupPerms(g, groupStart, numGroups, gi, pos+1, computeOrbits); //Recurse further after the swap, then afterwards undo the swap so that the next node can be swapped with pos
-        if(i != pos) {
-            TinyGraphSwapNodes(g, start+pos, start+i);
-            int t = _curLabel[start+pos]; _curLabel[start+pos] = _curLabel[start+i]; _curLabel[start+i] = t;
-        }
-    }
-}
-//The below helper function is redundant right now because the check in _tryGroupPerms already catches cliques
 
 /*
 //In L_K_Func_Sort, handle special cases that can be easily identified but take a long time to go through all possible permutations
@@ -356,7 +341,45 @@ Gint_type L_K_Func_Sort(Gint_type Gint, unsigned char permOut[], unsigned short 
     _sortBest = ~(Gint_type)0;
     if(computeOrbits) for(int i=0;i<_k;i++) _orbits[i]=_swapGroup[i];
     //We've now identified groups of nodes with equal values of f(n). Now, among all groups, we try all possible permutations, as the graphlets generated by these permutations must also by sorted by f(n).
-    _tryGroupPerms(&g, groupStart, numGroups, 0, 0, computeOrbits);
+    _toposortPass(&g, groupStart, numGroups, 0, 0, computeOrbits);
+    //Empty the tree so it can be reused for the second pass.
+    TreeFree(seenPerms);
+    seenPerms = TreeAlloc(CmpInt,NULL,NULL,copyInt128Ptr,freeInt128Ptr);
+    //Second pass: walk the stack backwards from the top (topological order: parents
+    //before children). For each complete state, recompute its Gint and swap-group-
+    //distribution key from the stored ordering, and look the key up in the seenPerms
+    //tree, which keeps only the state with the minimum decimal for every key: if the
+    //key is already stored with a value no larger than this state's, use the one in
+    //the tree and discard this one; otherwise discard the larger stored value and
+    //keep this smaller one. The surviving complete states determine _sortBest and, on
+    //ties, merge the orbits.
+    while(StackSize(topoStack) > 0) {
+        SORT_NODE *node = StackPop(topoStack).v;
+        if(node->len < _k) { free(node); continue; } //only complete states matter here
+        Gint_type value = _orderGint(&g, node->curLabel);
+        short labels[MAX_K];
+        for(int j = 0; j < _k; j++) labels[j] = _swapGroup[node->curLabel[j]];
+        foint key = {.ul = swapGroup2Int(labels, _k)};
+        foint found;
+        if(TreeLookup(seenPerms, key, &found)) { //if this swap group distribution was seen before
+            if(*(__int128*)found.v <= value) { free(node); continue; } //use the one in the tree: this state is redundant
+            TreeDelete(seenPerms, key); //this state has the smaller decimal: discard the larger one
+        }
+        foint val = {.v = Malloc(sizeof(__int128))};
+        *(__int128*)val.v = value;
+        TreeInsert(seenPerms, key, val);
+        if(value < _sortBest) {
+            _sortBest = value;
+            for(int j = 0; j < _k; j++) _bestPerm[j] = node->curLabel[j];
+            if(computeOrbits) for(int j=0;j<_k;j++) _orbits[j]=_swapGroup[j];
+        }
+        else if(value == _sortBest && computeOrbits){ //Per the definition of orbits - if swapping some nodes results in the same decimal, then the nodes that were swapped are in the same orbit. Which is why orbits are checked like this.
+            int orbitperm[_k];
+            for(int j=0;j<_k;j++) orbitperm[_bestPerm[j]]=node->curLabel[j];
+            makeOrbit(orbitperm, _orbits, _k);
+        }
+        free(node);
+    }
     if(permOut) for(i = 0; i < _k; i++) permOut[i] = (unsigned char)_bestPerm[i];
     if(computeOrbits) for(int i=0;i<_k;i++) olist[i]=_orbits[_bestPerm[i]];
     TreeFree(seenPerms);
