@@ -59,7 +59,9 @@ CXX=g++$(GCC_VER) $(SPEED) $(NDEBUG)
 export LIBWAYNE_HOME=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))/libwayne
 UNAME=$(shell uname -a | awk '{if(/CYGWIN/){V="CYGWIN"}else if(/Darwin/){if(/arm64/)V="arm64";else V="Darwin"}else if(/Linux/){V="Linux"}}END{if(V){print V;exit}else{print "unknown OS" > "/dev/stderr"; exit 1}}')
 #Old values for Cygwin 32-bit: 83886080, 0x5000000
-STACKSIZE=$(shell ($(GCC) -v 2>/dev/null; uname -a) | awk '/CYGWIN/{print "-Wl,--stack,0x8000000000"}/gcc-/{actualGCC=1}/Darwin/{print "-Wl,-stack_size -Wl,0x8000000000"}')
+STACKSIZE=$(shell ($(GCC) -v 2>/dev/null; uname -a) | awk '/CYGWIN/{print "-Wl,--stack,83886080"}/gcc-/{actualGCC=1}/Darwin/{print "-Wl,-stack_size -Wl,0x20000000"}')
+# 32-bit machine
+BITS=$(shell (uname -a) | awk '/i686/{print 32}/x86_64/||[Ll]inux{print 64}')
 CC=$(GCC) $(SPEED) $(NDEBUG) -Wno-misleading-indentation -Wno-unused-function -Wno-unused-but-set-variable -Wno-unused-variable -Wall -Wpointer-arith -Wcast-qual -Wcast-align -Wwrite-strings -Wstrict-prototypes -Wshadow $(PG)
 LIBWAYNE_COMP=-I $(LIBWAYNE_HOME)/include $(SPEED)
 LIBWAYNE_LINK=-L $(LIBWAYNE_HOME) -lwayne$(LIB_OPT) -lm -lpthread $(STACKSIZE) $(SPEED) $(STATIC_LINK)
@@ -97,6 +99,10 @@ ifdef NO8
 	# don't build k=6 if undirected 8 is disabled
 	K_DIR := $(filter-out 6,$(K_DIR))
 endif
+ifdef NO_D6
+	K_DIR := $(filter-out 6,$(K_DIR))
+endif
+
 ifdef NO7
 	# NO7 implies NO8; drop both 5 and 6
 	K_DIR := $(filter-out 5 6,$(K_DIR))
@@ -118,6 +124,9 @@ endif
 
 # these variables serve only to help in the creation of the generated file lists variables
 K := 3 4 5 6 $(SEVEN) $(EIGHT)
+ifdef ONLY_DIRECTED
+    K :=
+endif
 alpha_sampling_methods := NBE EBE MCMC
 alpha_txts_ud := $(foreach method,$(alpha_sampling_methods),$(UND_CANON_DIR)/alpha_list_$(method))
 canon_txt_ud := $(UND_CANON_DIR)/canon_map $(UND_CANON_DIR)/canon_list $(UND_CANON_DIR)/canon-ordinal-to-signature $(UND_CANON_DIR)/orbit_map $(alpha_txts_ud)
@@ -136,9 +145,11 @@ magic_table_txts := $(foreach k,$(K), orca_jesse_blant_table/UpperToLower$(k).tx
 #ehd_txts := $(foreach k,$(K), $(BLANT_CANON_DIR)/EdgeHammingDistance$(k).txt)
 
 ifeq ($(DYNAMIC_MAP),1)
-base: ./.notpristine show-gcc-ver libwayne blant
+    base: ./.notpristine show-gcc-ver libwayne blant
+else ifdef ONLY_DIRECTED
+    base: ./.notpristine show-gcc-ver libwayne blant $(canon_all)
 else
-base: ./.notpristine show-gcc-ver libwayne $(canon_all) magic_table blant test_all
+    base: ./.notpristine show-gcc-ver libwayne blant $(canon_all) magic_table test_all
 endif
 
 ##################################################################################################################
@@ -184,9 +195,9 @@ most: sub$(BLANT_CANON_DIR)
 endif
 
 ifeq ($(DYNAMIC_MAP),1)
-test_all:
+    test_all:
 else
-test_all: $(BLANT_CANON_DIR)/test_index_mode $(BLANT_CANON_DIR)/check_maps test_fast
+    test_all: $(BLANT_CANON_DIR)/test_index_mode $(BLANT_CANON_DIR)/check_maps test_fast
 endif
 
 all: most test_all
@@ -205,6 +216,21 @@ slow-canon-maps: libwayne $(SRCDIR)/slow-canon-maps.c | $(SRCDIR)/blant.h $(OBJD
 
 make-orbit-maps: libwayne $(SRCDIR)/make-orbit-maps.c | $(SRCDIR)/blant.h $(OBJDIR)/libblant.o
 	$(CC) -o $@ $(OBJDIR)/libblant.o $(SRCDIR)/make-orbit-maps.c $(LIBWAYNE_BOTH)
+
+# Debug harness: runs L_K_Func_Sort over the canonicals read from a canon list
+# file (default canon_maps/canon_list{<k>}.txt) and does nothing else. NOT part
+# of the normal build (base/most/all); build it only on explicit request, e.g.
+# make l-k-func-sort-test
+l-k-func-sort-test: libwayne $(SRCDIR)/l-k-func-sort-test.c $(SRCDIR)/blant-utils.c | $(SRCDIR)/blant.h $(OBJDIR)/libblant.o
+	$(CC) '-std=gnu11' -DDEBUG_ATTEMPTS -o $@ $(SRCDIR)/l-k-func-sort-test.c $(SRCDIR)/blant-utils.c $(OBJDIR)/libblant.o $(LIBWAYNE_BOTH)
+
+# Debug harness: for each canonical given on the command line, run L_K_Func_Sort
+# on every decimal in its isomorphism class (all k! relabelings) and report
+# whether the per-call attempt count varies across the class. Also NOT part of
+# the normal build; explicit request only:
+# make l-k-perm-test
+l-k-perm-test: libwayne $(SRCDIR)/l-k-perm-test.c $(SRCDIR)/blant-utils.c | $(SRCDIR)/blant.h $(OBJDIR)/libblant.o
+	$(CC) '-std=gnu11' -DDEBUG_ATTEMPTS -o $@ $(SRCDIR)/l-k-perm-test.c $(SRCDIR)/blant-utils.c $(OBJDIR)/libblant.o $(LIBWAYNE_BOTH)
 
 blant: libwayne $(OBJS) $(OBJDIR)/libblant.o | $(LIBWAYNE_HOME)/C++/mt19937.o # $(OBJDIR)/convert.o $(LIBWAYNE_HOME)/C++/FutureAsync.o
 	$(CXX) -o $@ $(OBJDIR)/libblant.o $(OBJS) $(LIBWAYNE_HOME)/C++/mt19937.o $(LIBWAYNE_LINK) # $(OBJDIR)/convert.o $(LIBWAYNE_HOME)/C++/FutureAsync.o
@@ -260,7 +286,7 @@ $(OBJDIR)/convert.o: $(SRCDIR)/convert.cpp
 $(LIBWAYNE_HOME)/C++/mt19937.o: libwayne # $(LIBWAYNE_HOME)/C++/FutureAsync.o
 	cd $(LIBWAYNE_HOME)/C++ && $(MAKE)
 
-$(OBJDIR)/libblant.o: libwayne $(SRCDIR)/libblant.c
+$(OBJDIR)/libblant.o: libwayne $(SRCDIR)/libblant.c $(BLANT_HEADERS)
 	mkdir -p $(dir $@)
 	$(CC) -c $(SRCDIR)/libblant.c -o $@ $(LIBWAYNE_COMP)
 
@@ -324,9 +350,8 @@ $(BLANT_CANON_DIR)/canon_map%.bin $(BLANT_CANON_DIR)/perm_map%.bin: $(SRCDIR)/cr
 $(DIR_CANON_DIR)/canon_map%.bin $(DIR_CANON_DIR)/perm_map%.bin: \
 	$(SRCDIR)/create-bin-data.c \
 	$(DIR_CANON_DIR)/canon_list%.txt \
-	$(DIR_CANON_DIR)/canon_map%.txt \
-	$(DIR_CANON_DIR)/canon_map%.bin $(DIR_CANON_DIR)/perm_map%.bin
-	# reuse same create-bin-data executable, but tell it we are working with directed data
+	$(DIR_CANON_DIR)/canon_map%.txt
+	[ -f create-bin-data$* ] || $(CC) '-std=gnu11' "-Dkk=$*" "-DkString=\"$*\"" -o create-bin-data$* $(SRCDIR)/libblant.c $(SRCDIR)/create-bin-data.c $(LIBWAYNE_BOTH)
 	[ -f $(DIR_CANON_DIR)/canon_map$*.bin -a -f $(DIR_CANON_DIR)/perm_map$*.bin ] || ./create-bin-data$* directed
 
 # Currently unused target
@@ -377,7 +402,7 @@ $(BLANT_CANON_DIR)/check_maps: test_stamp
 ### Cleaning ###
 
 clean:
-	/bin/rm -f *.[oa] blant create-bin-data3 create-bin-data4 create-bin-data5 create-bin-data6 create-bin-data7 create-bin-data8 canon-sift fast-canon-map make-orbit-maps compute-alphas-MCMC-slow compute-alphas-MCMC compute-alphas-NBE compute-alphas-EBE make-orca-jesse-blant-table Draw/graphette2dot blant-sanity make-subcanon-maps test_stamp $(BLANT_CANON_DIR)/check_maps $(BLANT_CANON_DIR)/test_index_mode
+	/bin/rm -f *.[oa] blant create-bin-data3 create-bin-data4 create-bin-data5 create-bin-data6 create-bin-data7 create-bin-data8 canon-sift fast-canon-map make-orbit-maps compute-alphas-MCMC-slow compute-alphas-MCMC compute-alphas-NBE compute-alphas-EBE make-orca-jesse-blant-table Draw/graphette2dot blant-sanity make-subcanon-maps test_stamp l-k-func-sort-test l-k-perm-test $(BLANT_CANON_DIR)/check_maps $(BLANT_CANON_DIR)/test_index_mode
 	/bin/rm -rf $(OBJDIR)/*
 	/bin/rm -rf $(DIR_CANON_DIR)/* || true
 

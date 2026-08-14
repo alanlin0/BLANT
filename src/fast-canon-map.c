@@ -80,7 +80,7 @@ typedef unsigned char xChar[XCHAR_SIZE];
 
 static xChar* data;
 static bool* done;
-static unsigned long canonicalDecimal[MAX_CANONICALS];
+static unsigned long *canonicalDecimal;
 
 void encodeChar(xChar ch, long indexD, long long indexP){
     unsigned long long x=(unsigned long)indexD+(unsigned long)indexP*(1<<(directed ? dGraphSize : udGraphSize));
@@ -160,27 +160,9 @@ void canon_map(void){
     long num_canon=0;
 
     //finding canonical forms of all graphettes
-    for(int t=1; t<numBitValues; t++){ //technically, this takes twice as long as it needs to (for canon_ascending_neighbors) - fix later
+    for(int t=1; t<numBitValues; t++){
 	assert(t>=0);
 	decimalToBitArray(bitMatrix, t);
-	#if CANON_ASCENDING_NEIGHBORS
-	assert(!directed);
-	TINY_GRAPH *G = TinyGraphAlloc(k,0,0);
-	TinyGraphEdgesAllDelete(G);
-	Int2TinyGraph(G, t);
-	Boolean flag=1;
-	int prevcount=-1;
-	for(int v=0;v<k;v++)
-	{
-	    if(G->degree[v]<prevcount)
-	    {
-		flag=0;
-		break;
-	    }
-	    prevcount=G->degree[v];
-	}
-	if(!flag) continue;
-	#endif
 	if(done[t]) continue;
 	done[t]=1; // this is a new canonical, and it the lowest by construction
 	encodeChar(data[t],++num_canon,0);
@@ -265,7 +247,8 @@ int main(int argc, char* argv[]){
     assert(numBitValues>0);
     data = calloc(numBitValues, sizeof(xChar));
     done = calloc(numBitValues, sizeof(bool));
-    if (!data || !done) {
+    canonicalDecimal = Malloc(MAX_CANONICALS * sizeof(unsigned long));
+    if (!data || !done || !canonicalDecimal) {
 	fprintf(stderr, "Memory allocation failed\n");
 	exit(1);
     }

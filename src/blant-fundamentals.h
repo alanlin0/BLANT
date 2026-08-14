@@ -21,7 +21,7 @@
 
 #define DYNAMIC_CANON_MAP 1 // it kinda does work now but let's keep it off to be safe
 //
-//Allow k=6 for directed graphs? This results in much higher maximum canonicals, resulting in much larger arrays.
+//Allow k=6 for directed graphs?
 #define DIRECTED_K6 1
 
 // MAX_K is the maximum number of nodes in a graphlet that is supported by BLANT when using a fixed lookup table (as
@@ -41,7 +41,7 @@
 #endif // MAX_K
 #define MAX_KD (5+DIRECTED_K6-SELF_LOOPS-(SYNTHETIC*2))
 
-#ifndef DIRECTED_K6
+#if DIRECTED_K6==0
   #if MAX_K <= 6
     #define MAX_CANONICALS 156
     #define MAX_ORBITS	 544
