@@ -735,18 +735,16 @@ static int RunBlantFromGraph(int k, unsigned long numSamples, GRAPH *G) {
     SetCopy(prev_node_set, V);
     TinyGraphInducedFromGraph(empty_g, G, Varray);
   }
-
+  #endif
   // if sample method is SAMPLE_INDEX or MCMC, and NOT index output
   if ((_sampleMethod == SAMPLE_INDEX || _sampleSubmethod == SAMPLE_MCMC_EC) &&
       !(_outputMode & indexGraphlets) && !(_outputMode & indexGraphletsRNO) &&
       !(_outputMode & indexOrbits))
     Fatal("currently only -mi and -mj output modes are supported for INDEX and "
           "EDGE_COVER sampling methods");
-  #endif
   // ethan note: nothing written about SAMPLE_INDEX sampling, but it must be
   // single threaded?
   if (_sampleMethod == SAMPLE_INDEX) {
-    #if !DYNAMIC_CANON_MAP
     if (_numThreads > 1) {
       Note("Index sampling must be single threaded; switching to one thread");
       _numThreads = 1; // this is unecessary since the below code doesn't use
@@ -758,12 +756,10 @@ static int RunBlantFromGraph(int k, unsigned long numSamples, GRAPH *G) {
     double heuristicValues[G->n];
     if (_orbitNumber != -1) {
       getOdvValues(heuristicValues, _orbitNumber, _nodeNames, G->n);
-    } else {
+    } else 
       getDoubleDegreeArr(heuristicValues,
                          G); // since heuristic values are doubles, we need to
                              // convert degree values to doubles
-    }
-    int percentToPrint = 1;
     node_whn
         nwhn_arr[G->n]; // nodes sorted first by the heuristic function and then
                         // either alphabetically or reverse alphabetically
@@ -786,12 +782,8 @@ static int RunBlantFromGraph(int k, unsigned long numSamples, GRAPH *G) {
     for (i = 0; i < G->n; i++) {
       prev_nodes_array[0] = nwhn_arr[i].node;
       SampleGraphletIndexAndPrint(G, prev_nodes_array, 1, heuristicValues);
-      if (i * 100 / G->n >= percentToPrint) {
-        fprintf(stderr, "%d%% done\n", percentToPrint);
-        ++percentToPrint;
-      }
+      fprintf(stderr, "processed seed %d of %d (%d%%)\n", i + 1, G->n, (i + 1) * 100 / G->n);
     }
-    #endif
   } else if (_sampleMethod == SAMPLE_MCMC_EC) {
     Fatal("should not get here--EDGE_COVER is a submethod of MCMC");
 #if 0
@@ -2372,9 +2364,7 @@ int main(int argc, char *argv[]) {
       #endif
       break;
     case 'o':
-      #if !DYNAMIC_CANON_MAP
       _orbitNumber = atoi(optarg);
-      #endif
       break;
     case 'f':
       #if !DYNAMIC_CANON_MAP
@@ -2384,9 +2374,7 @@ int main(int argc, char *argv[]) {
       #endif
       break;
     case 'a':
-      #if !DYNAMIC_CANON_MAP
       _alphabeticTieBreaking = (atoi(optarg) != 0);
-      #endif
       break;
     default:
       Fatal("Run without command arguments for short usage message, or with -h "
